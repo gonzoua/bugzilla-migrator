@@ -273,6 +273,9 @@ sub user_to_email {
         my $domain = $self->config('default_email_domain');
         $value = "$value\@$domain";
     }
+    # Normalize slightly.
+    $value =~ s/[<>,]//g;
+    $value =~ s/FreeBSD.org/FreeBSD.org/i;
     return $value;
 }
 

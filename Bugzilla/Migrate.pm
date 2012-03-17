@@ -26,6 +26,7 @@ use Bugzilla::Attachment;
 use Bugzilla::Bug qw(LogActivityEntry);
 use Bugzilla::Component;
 use Bugzilla::Constants;
+use Bugzilla::Date qw(guess_date);
 use Bugzilla::Error;
 use Bugzilla::Install::Requirements ();
 use Bugzilla::Install::Util qw(indicate_progress);
@@ -405,34 +406,29 @@ sub translate_field {
 
 sub parse_date {
     my ($self, $date) = @_;
-    my @time = strptime($date);
+    print $date . "\n";
+    # XXX - This isn't a proper fix.
+    # For some reason, perl doesn't know about these timezones.
+    $date =~ s/ MET/ CET/;
+    $date =~ s/ MEDT/ CEST/;
+    $date =~ s/ CET DST/ CEST/;
+    $date =~ s/ CDT/ PDT/;
+    $date =~ s/ PST/ PDT/;
+    $date =~ s/ EST/ PDT/;
+    my $time = guess_date($date);
     # Handle times with timezones that strptime doesn't know about.
-    if (!scalar @time) {
-        $date =~ s/\s+\S+$//;
-        @time = strptime($date);
+    #if (!scalar $time) {
+    #    $date =~ s/\s+\S+$//;
+    #    $time = guess_date($date);
+    #}
+    if (!$time) {
+        print "Cannot convert $date\n";
+    } else {
+        print $time->iso8601;
     }
-    my $tz;
-    if ($time[6]) {
-        $tz = Bugzilla->local_timezone->offset_as_string($time[6]);
-    }
-    else {
-        $tz = $self->config('timezone');
-        $tz =~ s/\s/_/g;
-        if ($tz eq 'local') {
-            $tz = Bugzilla->local_timezone;
-        }
-    }
-    my $dt = DateTime->new({
-        year   => $time[5] + 1900,
-        month  => $time[4] + 1,
-        day    => $time[3],
-        hour   => $time[2],
-        minute => $time[1],
-        second => int($time[0]),
-        time_zone => $tz, 
-    });
-    $dt->set_time_zone(Bugzilla->local_timezone);
-    return $dt->iso8601;
+    # Not sure what to do with this.
+    #$time->set_time_zone(Bugzilla->local_timezone);
+    return $time->iso8601;
 }
 
 sub translate_value {

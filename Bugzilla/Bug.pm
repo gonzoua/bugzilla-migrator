@@ -1409,8 +1409,9 @@ sub _check_comment {
     $comment =~ s/\s*$//s;
     $comment =~ s/\r\n?/\n/g; # Get rid of \r.
 
-    ThrowUserError('comment_too_long') if length($comment) > MAX_COMMENT_LENGTH;
-    return $comment;
+    print "Truncating comment:\n$comment" if length($comment) > MAX_COMMENT_LENGTH;
+    #ThrowUserError('comment_too_long') if length($comment) > MAX_COMMENT_LENGTH;
+    return substr($comment, 0, MAX_COMMENT_LENGTH);
 }
 
 sub _check_comment_is_private {
