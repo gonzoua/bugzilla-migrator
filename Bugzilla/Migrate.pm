@@ -50,6 +50,14 @@ use constant NON_COMMENT_FIELDS => ();
 
 use constant CONFIG_VARS => (
     {
+        name    => 'delete_fields',
+        default => {},
+        desc    => <<'END',
+# This is a list of fields in Gnats that you do not wish to import into Bugzilla.
+# The value isn't checked, so put whatever you want in there.
+END
+    },
+    {
         name    => 'translate_fields',
         default => {},
         desc    => <<'END',
@@ -356,6 +364,7 @@ sub translate_bug {
     my (%bug, %other_fields);
     my $original_status;
     foreach my $field (keys %$fields) {
+        next if defined $self->config('delete_fields')->{$field};
         my $value = delete $fields->{$field};
         my $bz_field = $self->translate_field($field);
         if ($bz_field) {
@@ -406,7 +415,6 @@ sub translate_field {
 
 sub parse_date {
     my ($self, $date) = @_;
-    print $date . "\n";
     # XXX - This isn't a proper fix.
     # For some reason, perl doesn't know about these timezones.
     $date =~ s/ MET/ CET/;
@@ -423,8 +431,6 @@ sub parse_date {
     #}
     if (!$time) {
         print "Cannot convert $date\n";
-    } else {
-        print $time->iso8601;
     }
     # Not sure what to do with this.
     #$time->set_time_zone(Bugzilla->local_timezone);

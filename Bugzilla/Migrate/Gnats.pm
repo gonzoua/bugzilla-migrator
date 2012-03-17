@@ -120,10 +120,17 @@ END
 # In GNATS, the "version" field can contain almost anything. However, in
 # Bugzilla, it's a drop-down, so you don't want too many choices in there.
 # If you specify a regular expression here, versions will be tested against
-# this regular expression, and if they match, the first match (the first set
-# of parentheses in the regular expression, also called "$1") will be used
+# this regular expression, and if they match, the 'capture' group will be used
 # as the version value for the bug instead of the full version value specified
 # in GNATS.
+END
+    },
+    {
+        name    => 'version_fallback',
+        default => '',
+        desc    => <<'END',
+# If the "version" field fails to match version_regex, use this fallback value
+# rather than the value of the field.
 END
     },
     {
@@ -678,17 +685,22 @@ sub translate_value {
 
     if ($field eq 'version' and $value ne '') {
         my $version_re = $self->config('version_regex');
+        my $version_fallback = $self->config('version_fallback');
         if ($version_re and $value =~ $version_re) {
-            $value = $1;
+	    $value = $+{capture};
+        } elsif ($version_fallback) {
+	    $value = $version_fallback;
         }
         # In the GNATS that I tested this with, there were many extremely long
         # values for "version" that caused some import problems (they were
         # longer than the max allowed version value). So if the version value
         # is longer than 32 characters, pull out the first thing that looks
         # like a version number.
-        elsif (length($value) > LONG_VERSION_LENGTH) {
-            $value =~ s/^.+?\b(\d[\w\.]+)\b.+$/$1/;
-        }
+	elsif (length($value) > LONG_VERSION_LENGTH) {
+            # This somehow inserts a newline.
+	    # $value =~ s/^.+?\b(\d[\w\.]+)\b.+$/$1/;
+	    $value = substr($value, 0, LONG_VERSION_LENGTH);
+	}
     }
     
     my @args = @_;

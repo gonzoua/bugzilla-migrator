@@ -603,6 +603,10 @@ sub create {
     # Make sure a comment is always defined.
     $params->{comment} = '' unless defined $params->{comment};
 
+    # We don't want the bug to appear in the system until it's correctly
+    # protected by groups.
+    my $timestamp = $params->{creation_ts}; 
+
     $class->check_required_create_fields($params);
     $params = $class->run_create_validators($params);
 
@@ -616,10 +620,6 @@ sub create {
     my ($comment, $privacy) = ($params->{comment}, $params->{comment_is_private});
     delete $params->{comment};
     delete $params->{comment_is_private};
-
-    # We don't want the bug to appear in the system until it's correctly
-    # protected by groups.
-    my $timestamp = delete $params->{creation_ts}; 
 
     my $ms_values = $class->_extract_multi_selects($params);
     my $bug = $class->insert_create_data($params);
