@@ -77,6 +77,12 @@ my @engine =
     pattern_tz => "%a %e %b %Y %H:%M:%S %Z",
   },
   {
+    # Alternative format used in email headers, optional day name was removed.
+    locale     => "en_GB",
+    pattern    => '%d %B %Y %T %z',
+    pattern_tz => '%d %B %Y %T %Z',
+  },
+  {
     locale     => "en_IE",
     pattern    => "%a %e %b %H:%M:%S %Y",
     pattern_tz => "%a %e %b %Y %H:%M:%S %Z",
@@ -90,6 +96,12 @@ my @engine =
     locale     => "en_US",
     pattern    => "%a %b %e %H:%M:%S %Y",
     pattern_tz => "%a %b %e %H:%M:%S %Z %Y",
+  },
+  {
+    # Alternative format, after replacing ambiguous TZ with the time offset.
+    locale     => "en_US",
+    pattern    => "%a %b %e %H:%M:%S %Y",
+    pattern_tz => "%a %b %e %H:%M:%S %z %Y",
   },
   {
     locale     => "es_ES",
@@ -303,6 +315,15 @@ for my $e (@engine) {
 sub guess_date
 {
 	my $d = shift;
+
+	# Some timezones are ambiguous. Assume what most people would assume.
+	$d =~ s/ MET/ CET/;
+	$d =~ s/ MEDT/ CEST/;
+	$d =~ s/ CET DST/ CEST/;
+	$d =~ s/ PST/ -0800/;
+	$d =~ s/ EST/ -0500/;
+	$d =~ s/ CDT/ -0500/;
+
 	my $k = 0;
 	my $dt;
 	my $l;

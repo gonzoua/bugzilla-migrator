@@ -415,22 +415,10 @@ sub translate_field {
 
 sub parse_date {
     my ($self, $date) = @_;
-    # XXX - This isn't a proper fix.
-    # For some reason, perl doesn't know about these timezones.
-    $date =~ s/ MET/ CET/;
-    $date =~ s/ MEDT/ CEST/;
-    $date =~ s/ CET DST/ CEST/;
-    $date =~ s/ CDT/ PDT/;
-    $date =~ s/ PST/ PDT/;
-    $date =~ s/ EST/ PDT/;
     my $time = guess_date($date);
-    # Handle times with timezones that strptime doesn't know about.
-    #if (!scalar $time) {
-    #    $date =~ s/\s+\S+$//;
-    #    $time = guess_date($date);
-    #}
     if (!$time) {
-        print "Cannot convert $date\n";
+        print "WARNING: DATE: Cannot convert $date. Defaulting to now()\n";
+	$time = DateTime->now;
     }
     # Not sure what to do with this.
     #$time->set_time_zone(Bugzilla->local_timezone);

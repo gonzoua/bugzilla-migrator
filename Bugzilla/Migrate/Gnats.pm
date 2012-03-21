@@ -26,11 +26,14 @@ use base qw(Bugzilla::Migrate);
 use Bugzilla::Constants;
 use Bugzilla::Install::Util qw(indicate_progress);
 use Bugzilla::Util qw(format_time trim generate_random_password);
+use Bugzilla::Migrate::GnatsAttachment qw(ParsePatches);
 
+use DateTime;
+use DateTime::Format::Strptime;
 use Email::Address;
 use Email::MIME;
 use File::Basename;
-use IO::File;
+use File::Temp;
 use List::MoreUtils qw(firstidx);
 use List::Util qw(first);
 
@@ -367,7 +370,20 @@ sub _parse_bug_file {
     # We parse attachments here instead of during translate_bug,
     # because otherwise we'd be taking up huge amounts of memory storing
     # all the raw attachment data in memory.
-    $fields->{attachments} = $self->_parse_attachments($fields);
+    my ($rest, @attachments);
+
+    my ($fix_meta, $fix, $fix_attachments) = $self->_parse_attachments(delete $fields->{Fix}, 0);
+    $fields->{Fix} = $fix if defined($fix);
+    push @attachments, @$fix_attachments if defined($fix_attachments);
+
+    my ($uf_meta, $uf, $uf_attachments) = $self->_parse_attachments(delete $fields->{Unformatted}, 0);
+    # The original used ->{_add_comment}, not sure what magic made it work, or if
+    # it worked at all.
+    $fields->{Unformatted} .= "\n\nUnformatted:\n" . $uf if defined($uf);
+    push @attachments, @$uf_attachments if defined($uf_attachments);
+
+    $fields->{attachments} = \@attachments;
+
     close($fh);
     return $fields;
 }
@@ -468,6 +484,7 @@ sub translate_bug {
     my @comments;
     foreach my $change (@$changes) {
         if (exists $change->{comment}) {
+            $change->{comment} =~ s/\s*\n\n[A-Za-z0-9\/\?\._:=-]+\s*\n$//;
             push(@comments, {
                 thetext  => $change->{comment},
                 who      => $change->{who},
@@ -477,10 +494,6 @@ sub translate_bug {
     }
     $bug->{history}  = $changes;
 
-    if (trim($extra_comment)) {
-        push(@comments, { thetext => $extra_comment, who => $bug->{reporter},
-                          bug_when => $bug->{delta_ts} || $bug->{creation_ts} });
-    }
     $bug->{comments} = \@comments;
     
     $bug->{component} = $self->config('component_name');
@@ -491,6 +504,13 @@ sub translate_bug {
     foreach my $attachment (@{ $bug->{attachments} || [] }) {
         $attachment->{submitter} = $bug->{reporter};
         $attachment->{creation_ts} = $bug->{creation_ts};
+    }
+
+    $extra_comment = $self->_parse_extra_comment($bug, $extra_comment);	
+
+    if (trim($extra_comment)) {
+        push @${$bug->{comments}}, { thetext => $extra_comment, who => $bug->{reporter},
+                          bug_when => $bug->{delta_ts} || $bug->{creation_ts} };
     }
 
     $self->debug($bug, 3);
@@ -567,8 +587,18 @@ sub _parse_audit_trail {
         }
         elsif ($on_why) {
             # "Why" lines are indented four characters.
+	    # They're not in the FreeBSD PR Database unfortunately -- flz
             $line =~ s/^\s{4}//;
-            $current_data{comment} .= "$line\n";
+	    # XXX - This doesn't guarantee that a full header block follows :-/
+            if ($line =~ /^From:/) {
+                $on_why = 0;
+                $self->debug(
+                    "Extra Audit-Trail line on $bug->{product} $bug->{bug_id}:"
+                     . " $line\n", 2);
+		$extra_comment .= "$line\n";
+	    } else {
+                $current_data{comment} .= "$line\n";
+	    }
         }
         else {
             $self->debug(
@@ -579,6 +609,89 @@ sub _parse_audit_trail {
     }
     $self->_store_audit_change(\@changes, $current_field, \%current_data);
     return (\@changes, $extra_comment);
+}
+
+sub _parse_extra_comment {
+    my ($self, $bug, $comment) = @_;
+
+    my $blank = 0;
+    my $in_header = 1;
+    my $entry = '';
+    my @entries;
+
+    my $boundary = generate_random_password(46);
+    my $new_boundary;
+
+    print "DEBUG: Extra comment is:\n$comment";
+
+    my @lines = split(/\n/, $comment);
+    foreach my $line (@lines) {
+        $line =~ s/\r$//;
+        if ($line =~ /^\S/) {
+            if ($blank eq 1 or $in_header ne 1) {
+	        trim($entry);
+                $entry =~ s/$boundary/$new_boundary/ if ($new_boundary);
+                push @entries, $entry if $entry ne '';
+		print "\nDEBUG: New entry is:\n:$entry";
+		$entry = '';
+	    }
+            $blank = 0;
+            $in_header = 1;
+            $entry .= "$line\n";
+        } elsif ($line =~ /^\s/) {
+            # Message actually starting now.
+	    if ($blank eq 1 and $in_header eq 1) {
+	        $in_header = 0;
+	        $entry .= <<EOF;
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="$boundary"
+
+EOF
+            } elsif ($blank eq 1) {
+                $entry .= "\n";
+	    }
+
+            # What I gather is that the boundary starts with '--' and contains
+	    # basically any character but a space, including at least one non-'-'
+	    # character. I should really read the MIME spec.
+	    # We're only interested in keeping the last closing boundary to replace
+	    # in the header we added.
+	    if ($line =~ /^\s--(.+[^\s-]+)--$/) {
+	        print "\nDEBUG: BOUNDARY: $1\n";
+	        $new_boundary = $1;
+	    }
+	    $blank = 0;
+	    # Some header lines are intentionally indented, don't touch these.
+            $line =~ s/^\s// if ($in_header ne 1);
+            $entry .= "$line\n";
+        } elsif ($line =~ /^$/) {
+            $blank = 1;
+	    #$in_header = 0;
+        } else {
+            $blank = 0;
+            $entry .= "$line\n";
+        }
+    }
+    trim($entry);
+    $entry =~ s/$boundary/$new_boundary/ if ($new_boundary);
+    push @entries, $entry if $entry ne '';
+
+    foreach my $entry (@entries) {
+	    trim($entry);
+	    print $entry;
+
+	    my ($metadata, $rest, $attachments) = $self->_parse_attachments($entry, 1);
+
+	    $rest =~ s/^[\s\n\r]+$//g;
+
+            push @{$bug->{comments}}, {
+                thetext  => $rest,
+                who      => $metadata->{from},
+                bug_when => $metadata->{date} } if $rest ne '';
+
+	    push @{$bug->{attachments}}, 
+	        @$attachments if defined($attachments);
+    }
 }
 
 sub _store_audit_change {
@@ -593,29 +706,21 @@ sub _store_audit_change {
 }
 
 sub _parse_attachments {
-    my ($self, $fields) = @_;
-    my $unformatted = delete $fields->{'Unformatted'};
-    my $gnats_boundary = GNATS_BOUNDARY;
-    # A sanity checker to make sure that we're parsing attachments right.
-    my $num_attachments = 0;
-    $num_attachments++ while ($unformatted =~ /\Q$gnats_boundary\E/g);
-    # Sometimes there's a GNATS_BOUNDARY that is on the same line as other data.
-    $unformatted =~ s/(\S\s*)\Q$gnats_boundary\E$/$1\n$gnats_boundary/mg;
+    my ($self, $text, $skipmail) = @_;
+    return (undef, '', undef) if !defined($text);
     # Often the "Unformatted" section starts with stuff before
     # ----gnatsweb-attachment---- that isn't necessary.
-    $unformatted =~ s/^\s*From:.+?Reply-to:[^\n]+//s;
-    $unformatted = trim($unformatted);
-    return [] if !$unformatted;
+    # XXX - Not sure if I should keep this.
+    #$text =~ s/^\s*From:.+?Reply-to:[^\n]+//s;
+    $text = trim($text);
+    return [] if !$text;
     $self->debug('Reading attachments...', 2);
     my $boundary = generate_random_password(48);
-    $unformatted =~ s/\Q$gnats_boundary\E/--$boundary/g;
-    # Sometimes the whole Unformatted section is indented by exactly
-    # one space, and needs to be fixed.
-    if ($unformatted =~ /--\Q$boundary\E\n /) {
-        $unformatted =~ s/^ //mg;
-    }
-    $unformatted = <<END;
-From: nobody
+    if ($skipmail eq 0) {
+      $text = ParsePatches(\$text, $boundary);
+      $text = <<END;
+From: nobody <nobody\@nowhere.com>
+Date: Moo. Will be overriden anyway.
 MIME-Version: 1.0
 Content-Type: multipart/mixed; boundary="$boundary"
 
@@ -624,42 +729,114 @@ This is a multi-part message in MIME format.
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 7bit
 
-$unformatted
+$text
 --$boundary--
 END
-    my $email = new Email::MIME(\$unformatted);
+    }
+    my $email = new Email::MIME(\$text);
     my @parts = $email->parts;
+
+    my $user;
+    my $address = $email->header('From');
+    my $date = $email->header('Date');
+    if ($skipmail eq 1) {
+	# Find out the sender.     
+	if ($date eq '') {
+	    # Something is really wrong here, just quit.
+ 	    print "WARNING: DATE: date is empty, full text is:\n$text";
+	}
+	if ($address eq '') {
+	    # Something is really wrong here, just quit.
+ 	    print "WARNING: ADDRESS: address is empty, full text is:\n$text";
+	}
+
+	if ($address eq '' or $date eq '') {
+	    return (undef, undef, undef);
+	}
+
+        print "DEBUG: ADDRESS (pre): $address.\n";
+	if ($address !~ /\S@\S/) {
+            print "WARNING: ADDRESS: Address $address doesn't contain '\@'.\n";
+        } else {
+	    $address =~ /\s*(\S+@\S+)\s*/;
+	    $address = $1;
+	    $address =~ s/[\(\)<>]//g;
+        }
+        print "DEBUG: ADDRESS (post): $address.\n";
+
+        my ($parsed) = Email::Address->parse($address);
+        if ($parsed) {
+            $address = $parsed->address;
+            $user = $address;
+            $user =~ s/\@FreeBSD.org/\@FreeBSD.org/i;
+            $self->add_user($user, $address);
+        } else {
+            print "WARNING: ADDRESS: Couldn't parse email address: $address. Defaulting to flz\@xbsd.org.";
+	    $address = 'flz@xbsd.org'; 
+	    $user = 'flz@xbsd.org' ;
+        }
+	print "DEBUG: USER: $user\n";
+
+	# Deal with the date now.
+	# Remove (TZ) because it usually comes with the offset anyway.
+        print "DEBUG: DATE (pre): $date.\n";
+	$date =~ s/\([A-Z]+\)$//;
+	# Remove day of the week, serves no purpose.
+	$date =~ s/^[A-Za-z]+, //;
+        $date = $self->SUPER::parse_date($date);
+        print "DEBUG: DATE (post): $date.\n";
+    }
+
+    my $metadata = {
+        from => $address,
+	date => $date,
+    };
+
     # Remove the fake body.
     my $part1 = shift @parts;
+    my $rest = '';
     if ($part1->body) {
-        $self->debug(" Additional Unformatted data found on "
-                     . $fields->{Category} . " bug " . $fields->{Number});
+        $self->debug(" Additional Unformatted data found");
         $self->debug($part1->body, 3);
-        $fields->{_add_comment} .= "\n\nUnformatted:\n" . $part1->body;
+	$rest = $part1->body;
+	$rest =~ s/\n?Patch attached with submission follows:\n\n?//;
     }
 
     my @attachments;
+    my $i = 1;
     foreach my $part (@parts) {
-        $self->debug('  Parsing attachment: ' . $part->filename);
-        my $temp_fh = IO::File->new_tmpfile or die ("Can't create tempfile: $!");
-        $temp_fh->binmode;
+        trim($part->body);
+	# Empty attachments can go away, thank you.
+        next if ($part->body eq '');
+	# We're not interested in PGP signatures or Geek Codes.
+        next if ($part->body =~ /^-----BEGIN PGP SIGNATURE-----/);
+        next if ($part->body =~ /^-----BEGIN GEEK CODE BLOCK-----/);
+	# Skip html part, really we don't need this crap.
+	next if ($part->content_type =~ m[text/html]i);
+        $self->debug("  Parsing attachment #" . $i++ . ": " . $part->filename);
+        my $temp_fh = File::Temp->new(DIR=>"/data/tmp");
+	if (!$temp_fh) {
+	  print "WARNING: TMPFILE: Can't create tempfile: $!";
+	  next;
+        }
         print $temp_fh $part->body;
         my $content_type = $part->content_type;
         $content_type =~ s/; name=.+$//;
+	if (!(defined($part->filename)) or $part->filename eq '') {
+		print "\nDESCR empty (defaulting to file.dat)!!!!\nPart body is:\n" . $part->body;
+		$part->name_set('file.dat');
+	}
         my $attachment = { filename    => $part->filename,
+			   creation_ts => $date,
                            description => $part->filename,
                            mimetype    => $content_type,
                            data        => $temp_fh };
+        $attachment->{submitter} = $user if defined($user);
         $self->debug($attachment, 3);
         push(@attachments, $attachment);
     }
     
-    if (scalar(@attachments) ne $num_attachments) {
-        warn "WARNING: Expected $num_attachments attachments but got "
-             . scalar(@attachments) . "\n" ;
-        $self->debug($unformatted, 3);
-    }
-    return \@attachments;
+    return ($metadata, $rest, \@attachments);
 }
 
 sub translate_value {
