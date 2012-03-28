@@ -3,6 +3,7 @@ use strict;
 use warnings;
 use utf8;
 use DateTime::Format::Strptime;
+use Date::Parse;
 
 my @engine =
 (
@@ -345,6 +346,10 @@ sub guess_date
 	if ($dt && $k > 0 && $engine[$k]->{count} > $engine[$k-1]->{count}) {
 		@engine = sort { $b->{count} <=> $a->{count} } @engine;
 	}
+    if (!$dt) {
+        my $epoch = str2time($d);
+        $dt = DateTime->from_epoch( epoch => $epoch ) if ($epoch);
+    }
 	return wantarray ? ($dt,$l) : $dt;
 }
 
