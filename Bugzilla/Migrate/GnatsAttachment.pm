@@ -225,6 +225,9 @@ sub FindPatchEnd
 		$$text =~ /^---{1,8}\s?\Q$pi->{name}\E ends here\s?---+/mi
 			and $pi->{size} = $-[0]-1;
 		# Chop footer line
+        # print "----> '$$text' <----, name = " . $pi->{name} . "\n";
+        # print "----> '$+[0]' '$-[0]' <---\n",
+        die "Wrong end of patch '". $pi->{name}  if (!defined($-[0]) || !defined($+[0]));
 		substr($$text, $-[0], $+[0] - $-[0], '');
 	} elsif ($pi->{type} eq 'diff') {
 		# XXX: could do better
