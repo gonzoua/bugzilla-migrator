@@ -207,6 +207,10 @@ use constant GNATS_BOUNDARY => '----gnatsweb-attachment----';
 
 use constant LONG_VERSION_LENGTH => 32;
 
+my %blacklisted_bugs = (
+    134986 => "misaligned start patch/end patch markers"
+);
+
 #########
 # Hooks #
 #########
@@ -332,6 +336,7 @@ sub _read_bugs {
     my $path = $self->config('gnats_path');
     my @directories = glob("$path/*");
     my @bugs;
+    @directories = grep { /\/i386/ } @directories;
     foreach my $directory (@directories) {
         next if !-d $directory;
         my $name = basename($directory);
@@ -348,8 +353,9 @@ sub _parse_project {
 
     $self->debug("Reading Project: $directory");
     # Sometimes other files get into gnats directories.
-    @files = grep { basename($_) =~ /^\d+$/ } @files;
+    @files = grep { (basename($_) =~ /^\d+$/) && !defined($blacklisted_bugs{basename($_)}) } @files;
     my @bugs;
+
     my $count = 1;
     my $total = scalar @files;
     print basename($directory) . ":\n";
