@@ -301,22 +301,24 @@ sub _read_products {
 
     open(my $categories_fh, '<', $file) || die "$file: $!";    
     my @products;
+    my %product = ( name => "FreeBSD", description => "FreeBSD OS" );
+    $product{components} = [];
     foreach my $line (<$categories_fh>) {
         $line = trim($line);
         next if $line =~ /^#/;
         my ($name, $description, $assigned_to, $cc) = split(':', $line, 4);
-        my %product = ( name => $name, description => $description );
         
         my @initial_cc = split(',', $cc);
         @initial_cc = @{ $self->translate_value('user', \@initial_cc) };
         $assigned_to = $self->translate_value('user', $assigned_to);
-        my %component = ( name         => $self->config('component_name'),
+        my %component = ( name         => $name,
                           description  => $description,
                           initialowner => $assigned_to,
                           initial_cc   => \@initial_cc );
-        $product{components} = [\%component];
-        push(@products, \%product);
+
+        push @{$product{components}}, \%component;
     }
+    push(@products, \%product);
     close($categories_fh);
     return \@products;
 }
@@ -383,6 +385,7 @@ sub _parse_bug_file {
     push @attachments, @$uf_attachments if defined($uf_attachments);
 
     $fields->{attachments} = \@attachments;
+    $fields->{product} = 'FreeBSD';
 
     close($fh);
     return $fields;
@@ -496,7 +499,7 @@ sub translate_bug {
 
     $bug->{comments} = \@comments;
     
-    $bug->{component} = $self->config('component_name');
+    # $bug->{component} = $self->config('component_name');
     if (!$bug->{short_desc}) {
         $bug->{short_desc} = NO_SUBJECT;
     }
@@ -506,11 +509,13 @@ sub translate_bug {
         $attachment->{creation_ts} = $bug->{creation_ts};
     }
 
-    $extra_comment = $self->_parse_extra_comment($bug, $extra_comment);	
+    if (defined($extra_comment)) {
+        $extra_comment = $self->_parse_extra_comment($bug, $extra_comment);	
 
-    if (trim($extra_comment)) {
-        push @${$bug->{comments}}, { thetext => $extra_comment, who => $bug->{reporter},
+        if (trim($extra_comment)) {
+            push @${$bug->{comments}}, { thetext => $extra_comment, who => $bug->{reporter},
                           bug_when => $bug->{delta_ts} || $bug->{creation_ts} };
+        }
     }
 
     $self->debug($bug, 3);
@@ -622,7 +627,7 @@ sub _parse_extra_comment {
     my $boundary = generate_random_password(46);
     my $new_boundary;
 
-    print "DEBUG: Extra comment is:\n$comment";
+    # print "DEBUG: Extra comment is:\n$comment";
 
     my @lines = split(/\n/, $comment);
     foreach my $line (@lines) {
@@ -632,7 +637,7 @@ sub _parse_extra_comment {
 	        trim($entry);
                 $entry =~ s/$boundary/$new_boundary/ if ($new_boundary);
                 push @entries, $entry if $entry ne '';
-		print "\nDEBUG: New entry is:\n:$entry";
+                # print "\nDEBUG: New entry is:\n:$entry";
 		$entry = '';
 	    }
             $blank = 0;
@@ -678,7 +683,7 @@ EOF
 
     foreach my $entry (@entries) {
 	    trim($entry);
-	    print $entry;
+        # print $entry;
 
 	    my ($metadata, $rest, $attachments) = $self->_parse_attachments($entry, 1);
 
@@ -814,7 +819,7 @@ END
 	# Skip html part, really we don't need this crap.
 	next if ($part->content_type =~ m[text/html]i);
         $self->debug("  Parsing attachment #" . $i++ . ": " . $part->filename);
-        my $temp_fh = File::Temp->new(DIR=>"/data/tmp");
+        my $temp_fh = File::Temp->new(DIR=>"/home/gonzo/data/tmp");
 	if (!$temp_fh) {
 	  print "WARNING: TMPFILE: Can't create tempfile: $!";
 	  next;
