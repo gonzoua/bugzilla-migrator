@@ -44,6 +44,8 @@ use File::Basename;
 use List::Util qw(first);
 use Safe;
 
+use Encode qw(encode decode);
+
 use constant CUSTOM_FIELDS      => {};
 use constant REQUIRED_MODULES   => [];
 use constant NON_COMMENT_FIELDS => ();
@@ -864,6 +866,8 @@ sub _do_table_insert {
     my @fields    = keys %$hash;
     my @questions = ('?') x @fields;
     my @values    = map { $hash->{$_} } @fields;
+
+    @values    = map { encode('utf-8', decode('iso-8859-1', $_)); } @values;
     my $field_sql    = join(',', @fields);
     my $question_sql = join(',', @questions);
     Bugzilla->dbh->do("INSERT INTO $table ($field_sql) VALUES ($question_sql)",
