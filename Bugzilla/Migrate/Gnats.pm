@@ -372,7 +372,7 @@ sub _parse_project {
 sub _parse_bug_file {
     my ($self, $file) = @_;
     $self->debug("Reading $file");
-    open(my $fh, "<", $file) || die "$file: $!";
+    open(my $fh, "< :encoding(Latin1)", $file) || die "$file: $!";
     my $email = Email::Simple::FromHandle->new($fh);
     my $fields = $self->_get_gnats_field_data($email);
     # We parse attachments here instead of during translate_bug,
