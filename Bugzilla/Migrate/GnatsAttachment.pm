@@ -100,10 +100,10 @@ sub ParsePatches
 		}
 
 		$formatted .= "--$boundary\n";
-		$formatted .= "Content-Type: " . $pi->{ctype} . "; name=" . $pi->{name} . "\n";
+		$formatted .= "Content-Type: " . $pi->{ctype} . "; name=\"" . $pi->{name} . "\"\n";
 		$formatted .= "Content-Transfer-Encoding: " . $pi->{encoding} . "\n";
 		$formatted .= "Content-Disposition: attachment;";
-	        $formatted .= " filename=" .$pi->{name} . "\n\n"; # XXX - Generate random if undef.
+	        $formatted .= " filename=\"" .$pi->{name} . "\"\n\n"; # XXX - Generate random if undef.
 
 	        $formatted .= substr($$text,
 			       	0,
@@ -222,7 +222,7 @@ sub FindPatchEnd
 		$$text =~ /$/
 			and $pi->{size} = $+[0];
 	} elsif ($pi->{type} eq 'stdattach') {
-		$$text =~ /^---{1,8}\s?\Q$pi->{name}\E ends here\s?---+/mi
+		$$text =~ /^\s*---{1,8}\s?\Q$pi->{name}\E ends here\s?---+/mi
 			and $pi->{size} = $-[0]-1;
 		# Chop footer line
         # print "----> '$$text' <----, name = " . $pi->{name} . "\n";
