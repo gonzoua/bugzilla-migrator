@@ -48,6 +48,7 @@ use constant PATCH_UUENC_BIN => 0x0008;
 use constant PATCH_SHAR      => 0x0010;
 use constant PATCH_BASE64    => 0x0020;
 
+use Carp;
 
 #------------------------------------------------------------------------------
 # Func: ParsePatches()
@@ -89,7 +90,17 @@ sub ParsePatches
 			}
 		}
 
-		$pi->{name} = "file.txt" unless defined($pi->{name});
+		if (!defined($pi->{name})) {
+			if ($pi->{type} eq 'shar') {
+				$pi->{name} = "file.shar";
+			}
+			elsif ($pi->{type} eq 'diff') {
+				$pi->{name} = "file.diff";
+			}
+			else {
+				$pi->{name} = "file.txt";
+			}
+		}
 
 		if ($pi->{type} eq 'base64') {
 			$pi->{ctype} = 'application/octet-stream';
@@ -227,7 +238,7 @@ sub FindPatchEnd
 		# Chop footer line
         # print "----> '$$text' <----, name = " . $pi->{name} . "\n";
         # print "----> '$+[0]' '$-[0]' <---\n",
-        die "Wrong end of patch '". $pi->{name}  if (!defined($-[0]) || !defined($+[0]));
+        confess "Wrong end of patch '". $pi->{name} . "'" if (!defined($-[0]) || !defined($+[0]));
 		substr($$text, $-[0], $+[0] - $-[0], '');
 	} elsif ($pi->{type} eq 'diff') {
 		# XXX: could do better
