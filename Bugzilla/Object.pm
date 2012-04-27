@@ -30,6 +30,7 @@ use Bugzilla::Error;
 
 use Date::Parse;
 use List::MoreUtils qw(part);
+use Carp;
 
 use constant NAME_FIELD => 'name';
 use constant ID_FIELD   => 'id';
@@ -139,6 +140,7 @@ sub check {
     # "there is no X with the name 0". This is true even for ids. So here,
     # we only check if the parameter is undefined or empty.
     if (!defined $param->{$check_param} or $param->{$check_param} eq '') {
+        confess "Object not specified";
         ThrowUserError('object_not_specified', { class => $class });
     }
 
