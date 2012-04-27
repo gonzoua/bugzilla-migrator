@@ -25,6 +25,7 @@
 use strict;
 
 package Bugzilla::Attachment;
+use Carp;
 
 =head1 NAME
 
@@ -543,6 +544,7 @@ sub _check_content_type {
     if (!$content_type
         || $content_type !~ /^($legal_types)\/[a-z0-9_\-\+\.]+(;.+)?$/i)
     {
+        confess "Empty content type" if (!defined($content_type));
         ThrowUserError("invalid_content_type", { contenttype => $content_type });
     }
     trick_taint($content_type);
@@ -608,7 +610,7 @@ sub _check_description {
     my ($invocant, $description) = @_;
 
     $description = trim($description);
-    $description || ThrowUserError('missing_attachment_description');
+    $description || confess('missing_attachment_description');
     return $description;
 }
 
