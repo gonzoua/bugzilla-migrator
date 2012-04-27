@@ -28,6 +28,7 @@ use Bugzilla::Install::Util qw(indicate_progress);
 use Bugzilla::Util qw(format_time trim generate_random_password);
 use Bugzilla::Migrate::GnatsAttachment qw(ParsePatches);
 
+use Carp qw(cluck confess);
 use DateTime;
 use DateTime::Format::Strptime;
 use Email::Address;
@@ -163,7 +164,7 @@ sub CONFIG_VARS {
 use constant SKIP_DIRECTORIES => qw(
     gnats-adm
     gnats-queue
-    pending
+    junk.old
 );
 
 use constant NON_COMMENT_FIELDS => qw(
@@ -208,7 +209,6 @@ use constant GNATS_BOUNDARY => '----gnatsweb-attachment----';
 use constant LONG_VERSION_LENGTH => 32;
 
 my %blacklisted_bugs = (
-    134986 => "misaligned start patch/end patch markers"
 );
 
 #########
@@ -285,6 +285,8 @@ sub user_to_email {
     }
     elsif ($value !~ /@/) {
         my $domain = $self->config('default_email_domain');
+        # print "++> $value => $value\@$domain\n";
+        confess "empty email" if ($value eq '');
         $value = "$value\@$domain";
     }
     # Normalize slightly.
@@ -336,7 +338,6 @@ sub _read_bugs {
     my $path = $self->config('gnats_path');
     my @directories = glob("$path/*");
     my @bugs;
-    @directories = grep { /\/i386/ } @directories;
     foreach my $directory (@directories) {
         next if !-d $directory;
         my $name = basename($directory);
@@ -354,6 +355,11 @@ sub _parse_project {
     $self->debug("Reading Project: $directory");
     # Sometimes other files get into gnats directories.
     @files = grep { (basename($_) =~ /^\d+$/) && !defined($blacklisted_bugs{basename($_)}) } @files;
+    my $pr_from = $ENV{PR_FROM};
+    my $pr_to = $ENV{PR_TO};
+    if (defined($pr_from) && defined($pr_to)) {
+        @files = grep { ($pr_from <= basename($_)) && (basename($_) < $pr_to) } @files;
+    }
     my @bugs;
 
     my $count = 1;
@@ -392,6 +398,9 @@ sub _parse_bug_file {
 
     $fields->{attachments} = \@attachments;
     $fields->{product} = 'FreeBSD';
+    # Ignore all keywords at the mment
+    $fields->{Keywords} = '';
+    confess "$file" if !defined($fields->{Number});
 
     close($fh);
     return $fields;
@@ -432,7 +441,14 @@ sub _get_gnats_field_data {
         push(@value_lines, $line) if defined $line;
     }
     $fields{$current_field} = _handle_lines(\@value_lines);
-    $fields{cc} = [$email->header('Cc')] if $email->header('Cc');
+    my $cc = $email->header('Cc');
+    if ($cc) {
+        $cc =~ s/; /, /g;
+        $cc =~ s/;,/,/g;
+        $cc =~ s/;$//g;
+        $cc =~ s/,(\S)/, $1/g;
+        $fields{cc} = [$cc];
+    }
     
     # If the Originator is invalid and we don't have a translation for it,
     # use the From header instead.
@@ -480,6 +496,7 @@ sub translate_bug {
     my ($self, $fields) = @_;
 
     my ($bug, $other_fields) = $self->SUPER::translate_bug($fields);
+    print STDERR "++> " . $bug->{bug_id} . "\n";
 
     $bug->{attachments} = delete $other_fields->{attachments};
 
@@ -539,7 +556,7 @@ sub _parse_audit_trail {
         return ([], $audit_trail);
     }
     
-    my (@changes, %current_data, $current_column, $on_why);
+    my (@changes, %current_data, $current_column, $on_why, %seen_columns);
     my $extra_comment = '';
     my $current_field;
     my @all_lines = split("\n", $audit_trail);
@@ -552,6 +569,8 @@ sub _parse_audit_trail {
         #     This is some comment here about the change.
         if ($line =~ /^(\S+)-Changed-(\S+):(.*)/) {
             my ($field, $column, $value) = ($1, $2, $3);
+            $field = ucfirst(lc($field));
+            $column = lc($column);
             my $bz_field = $self->translate_field($field);
             # If it's not a field we're importing, we don't care about
             # its history.
@@ -561,35 +580,53 @@ sub _parse_audit_trail {
             # use in Bugzilla for the audit trail on that field.
             next if $bz_field eq 'comment';
             $current_field = $bz_field if !$current_field;
-            if ($bz_field ne $current_field) {
+            if (($bz_field ne $current_field) ||
+                defined($seen_columns{$column})) {
                 $self->_store_audit_change(
                     \@changes, $current_field, \%current_data);
                 %current_data = ();
+                %seen_columns = ();
                 $current_field = $bz_field;
             }
+            $seen_columns{$column} = 1;
             $value = trim($value);
             $self->debug("  $bz_field $column: $value", 3);
-            if ($column eq 'From-To') {
+            if ($column eq 'from-to') {
                 my ($from, $to) = split('->', $value, 2);
                 # Sometimes there's just a - instead of a -> between the values.
                 if (!defined($to)) {
                     ($from, $to) = split('-', $value, 2);
                 }
+                # Use default
+                $to = 'freebsd-bugs' if (!defined($to) || $to =~ /^\s*$/);
+                $from = 'freebsd-bugs' if (!defined($from) || $from =~ /^\s*$/);
                 $current_data{added} = $to;
                 $current_data{removed} = $from;
             }
-            elsif ($column eq 'By') {
+            elsif ($column eq 'by') {
                 my $email = $self->translate_value('user', $value);
                 # Sometimes we hit users in the audit trail that we haven't
                 # seen anywhere else.
                 $current_data{who} = $email;
             }
-            elsif ($column eq 'When') {
+            elsif ($column eq 'when') {
                 $current_data{bug_when} = $self->parse_date($value);
             }
-            if ($column eq 'Why') {
+            if ($column eq 'why') {
                 $value = '' if !defined $value;
-                $current_data{comment} = $value;
+                if (!defined($current_data{comment}))
+                {
+                    $current_data{comment} = "$field Changed\n";
+                }
+                else {
+                    $current_data{comment} .= "$field Changed\n" . $current_data{comment};
+                }
+
+                my $from = $current_data{removed};
+                my $to = $current_data{added};
+                $current_data{comment} .= "From-To: $from" . "->" . "$to\n\n" if (defined($from) && defined($to));;
+
+                $current_data{comment} .= $value;
                 $on_why = 1;
             }
             else {
@@ -783,8 +820,10 @@ END
             $self->add_user($user, $address);
         } else {
             print "WARNING: ADDRESS: Couldn't parse email address: $address. Defaulting to flz\@xbsd.org.";
-	    $address = 'flz@xbsd.org'; 
-	    $user = 'flz@xbsd.org' ;
+            # $address = 'flz@xbsd.org'; 
+            # $user = 'flz@xbsd.org' ;
+            $address = 'gonzo@bluezbox.com'; 
+            $user = 'gonzo@bluezbox.com';
         }
 	print "DEBUG: USER: $user\n";
 
@@ -832,11 +871,22 @@ END
         }
         print $temp_fh $part->body;
         my $content_type = $part->content_type;
-        $content_type =~ s/; name=.+$//;
+        if (defined($content_type)) {
+            $content_type =~ s/; name=.+$//;
+        }
+        else {
+            if ($part->body =~ /[^[:ascii:]]/) {
+                $content_type = 'application/octet-stream';
+            }
+            else {
+                $content_type = 'text/plain';
+            }
+        }
 	if (!(defined($part->filename)) or $part->filename eq '') {
 		print "\nDESCR empty (defaulting to file.dat)!!!!\nPart body is:\n" . $part->body;
 		$part->name_set('file.dat');
 	}
+
         my $attachment = { filename    => $part->filename,
 			   creation_ts => $date,
                            description => $part->filename,
@@ -855,6 +905,10 @@ sub translate_value {
     my ($field, $value, $options) = @_;
     my $original_value = $value;
     $options ||= {};
+
+    if (!defined($value)) {
+        cluck "Empty value for field '$field'";
+    }
 
     if (!ref($value) and grep($_ eq $field, $self->USER_FIELDS)) {
         if ($value =~ /(\S+\@\S+)/) {
@@ -899,12 +953,16 @@ sub translate_value {
     
     if (grep($_ eq $field, $self->USER_FIELDS)) {
         my $from_value = $value;
-        $value = $self->user_to_email($value);
         $args[1] = $value;
         # If we got something new from user_to_email, do any necessary
         # translation of it.
         $value = $self->SUPER::translate_value(@args);
         if (!$options->{check_only}) {
+            $value = $self->user_to_email($value);
+            if ($value =~ / /) {
+                confess "Space in $field $value";
+            }
+
             $self->add_user($from_value, $value);
         }
     }
