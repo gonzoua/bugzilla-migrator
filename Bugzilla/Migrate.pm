@@ -402,9 +402,9 @@ sub _generate_description {
         next if $value eq '';
         $description .= "$field: $value\n";
     }
-    $description .= "\n" if $description;
+    $description = "\n\n$description" if $description;
 
-    return $description . $bug->{comment};
+    return $bug->{comment} . "$description";
 }
 
 sub translate_field {
